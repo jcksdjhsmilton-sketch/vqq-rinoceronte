@@ -1,0 +1,104 @@
+name: Render VQQ
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  prep:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.prep.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Dependencias
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y ffmpeg
+          pip -q install faster-whisper pillow tqdm
+      - name: Roteiro e sincronizacao
+        id: prep
+        run: python prep.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: work
+          path: |
+            /home/runner/vqq/timeline.json
+            /home/runner/vqq/blender_scene.py
+            /home/runner/vqq/narracao.mp3
+
+  render:
+    needs: prep
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prep.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Dependencias
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libxkbcommon0 libsm6 libx11-6 libxext6 libgomp1 xz-utils fonts-dejavu-core ffmpeg
+          pip -q install pillow tqdm
+      - uses: actions/cache@v4
+        id: bl
+        with:
+          path: /home/runner/blender
+          key: blender-4.2.11
+      - name: Blender
+        if: steps.bl.outputs.cache-hit != 'true'
+        run: |
+          wget -q --tries=5 -O /tmp/b.tar.xz https://download.blender.org/release/Blender4.2/blender-4.2.11-linux-x64.tar.xz
+          mkdir -p /home/runner/blender
+          tar -xf /tmp/b.tar.xz -C /home/runner/blender --strip-components=1
+      - name: Fontes
+        run: |
+          mkdir -p /home/runner/fonts
+          curl -sL -o /home/runner/fonts/PressStart2P-Regular.ttf https://github.com/google/fonts/raw/main/ofl/pressstart2p/PressStart2P-Regular.ttf || true
+          curl -sL -o /home/runner/fonts/ShareTechMono-Regular.ttf https://github.com/google/fonts/raw/main/ofl/sharetechmono/ShareTechMono-Regular.ttf || true
+      - uses: actions/download-artifact@v4
+        with:
+          name: work
+          path: /home/runner/vqq
+      - name: Bloco ${{ matrix.start }} a ${{ matrix.end }}
+        run: python chunk.py ${{ matrix.start }} ${{ matrix.end }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seg-${{ matrix.name }}
+          path: /home/runner/out/*.mp4
+
+  final:
+    needs: render
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: work
+          path: work
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: seg-*
+          merge-multiple: true
+          path: segs
+      - name: Juntar blocos + audio
+        run: python3 final.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: video-final
+          path: vqq_rinoceronte.mp4
+      - name: Publicar em Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "video-${{ github.run_number }}" vqq_rinoceronte.mp4 --title "Video ${{ github.run_number }}" --notes "Render automatico"
