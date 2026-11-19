@@ -1,0 +1,44 @@
+name: Juntar video final
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Numero do run do Render VQQ"
+        required: true
+
+jobs:
+  final:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y ffmpeg
+      - uses: actions/download-artifact@v4
+        with:
+          name: work
+          path: work
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: seg-*
+          merge-multiple: true
+          path: segs
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Juntar blocos + audio
+        run: python3 final.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: video-final
+          path: vqq_rinoceronte.mp4
+      - name: Publicar em Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "video-${{ github.run_number }}" vqq_rinoceronte.mp4 --title "Video final" --notes "Render automatico"
